@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# data & features
+features/
+*.npy
+*.npy.gz
+
+# outputs & checkpoints
+output/
+lightning_logs/
+wandb/
+
+# logs
+logs/
+*.log
+
+# notebooks checkpoints
+.ipynb_checkpoints/
+
+# misc
+.DS_Store
+*.swp
+fid_is_result.log
+wandb_resume.json
