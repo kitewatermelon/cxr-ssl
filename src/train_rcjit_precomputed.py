@@ -49,8 +49,9 @@ class MIMICPrecomputedDataset(Dataset):
     - feat:  raddino_<dicom_id>.npy co-located with the image   (768-dim)
     """
 
-    def __init__(self, data_dir: str, split: str):
+    def __init__(self, data_dir: str, split: str, feat_prefix: str = "raddino_"):
         self.data_dir = data_dir
+        self.feat_prefix = feat_prefix
 
         split_df = pd.read_csv(os.path.join(data_dir, "mimic-cxr-2.0.0-split.csv.gz"))
         split_df = split_df[split_df["split"] == split].reset_index(drop=True)
@@ -63,7 +64,7 @@ class MIMICPrecomputedDataset(Dataset):
 
         mask = [
             os.path.exists(os.path.join(_study_dir_for(row), f"{row['dicom_id']}.npy")) and
-            os.path.exists(os.path.join(_study_dir_for(row), f"raddino_{row['dicom_id']}.npy"))
+            os.path.exists(os.path.join(_study_dir_for(row), f"{feat_prefix}{row['dicom_id']}.npy"))
             for _, row in split_df.iterrows()
         ]
         dropped = sum(1 for m in mask if not m)
@@ -85,12 +86,12 @@ class MIMICPrecomputedDataset(Dataset):
         sdir = self._study_dir(row)
 
         arr  = np.load(os.path.join(sdir, f"{did}.npy"))   # (256, 256) uint8
-        img  = Image.fromarray(arr, mode="L").convert("RGB")
+        img  = Image.fromarray(arr, mode="L")
         img  = TF.resize(img, [224, 224])
-        img  = TF.to_tensor(img)                           # [0, 1]
+        img  = TF.to_tensor(img)                           # (1, H, W) [0, 1]
         img  = img * 2.0 - 1.0                             # [-1, 1]
 
-        feat = np.load(os.path.join(sdir, f"raddino_{did}.npy"))   # (768,) float32
+        feat = np.load(os.path.join(sdir, f"{self.feat_prefix}{did}.npy"))   # (768,) float32
         feat = torch.from_numpy(feat).float()
         return img, feat
 
@@ -170,8 +171,9 @@ class RCJiTPrecomputedModule(pl.LightningModule):
 
         denoiser_args = argparse.Namespace(
             img_size           = args.img_size,
+            in_channels        = 1,
             model_variant      = args.model_variant,
-            ctx_mode           = "cls",
+            ctx_mode           = args.ctx_mode,
             encoder_type       = "precomputed",
             encoder_ckpt       = None,
             encoder_config     = None,
@@ -204,6 +206,10 @@ class RCJiTPrecomputedModule(pl.LightningModule):
             params = self.denoiser._trainable_params()
             self.denoiser.ema_params1 = copy.deepcopy(params)
             self.denoiser.ema_params2 = copy.deepcopy(params)
+        else:
+            device = next(self.denoiser.parameters()).device
+            self.denoiser.ema_params1 = [p.to(device) for p in self.denoiser.ema_params1]
+            self.denoiser.ema_params2 = [p.to(device) for p in self.denoiser.ema_params2]
 
     def on_save_checkpoint(self, checkpoint):
         names = [n for n, p in self.denoiser.named_parameters() if p.requires_grad]
@@ -255,7 +261,8 @@ def parse_args():
     p = argparse.ArgumentParser("RCJiT precomputed-feature trainer")
 
     # data
-    p.add_argument("--data_dir",    required=True, help="MIMIC-CXR-JPG root (raddino_*.npy co-located with images)")
+    p.add_argument("--data_dir",    required=True, help="MIMIC-CXR-JPG root")
+    p.add_argument("--feat_prefix", default="raddino_", help="Feature file prefix (e.g. raddino_ or radjepa_)")
     p.add_argument("--img_size",    type=int, default=224)
     p.add_argument("--num_workers", type=int, default=12)
     p.add_argument("--model_variant", default="S_16", choices=["S_16", "S_8", "B_16", "B_8"])
@@ -280,7 +287,8 @@ def parse_args():
     p.add_argument("--proj_dropout",   type=float, default=0.0)
 
     # sampling
-    p.add_argument("--cfg",          type=float, default=1.5)
+    p.add_argument("--cfg",          type=float, default=1.0)
+    p.add_argument("--ctx_mode",     default="cls", choices=["cls", "pool"])
     p.add_argument("--ode_steps",    type=int,   default=50)
     p.add_argument("--ode_method",   default="heun", choices=["euler", "heun"])
     p.add_argument("--interval_min", type=float, default=0.0)
@@ -294,6 +302,7 @@ def parse_args():
     p.add_argument("--resume_from", default=None)
     p.add_argument("--wandb_project",  default="rcjit-mae-cxr")
     p.add_argument("--wandb_run_name", default=None)
+    p.add_argument("--wandb_run_id",   default=None, help="Resume existing WandB run")
     p.add_argument("--log_every",      type=int, default=50)
     p.add_argument("--compile", action="store_true")
     p.add_argument("--seed",    type=int, default=42)
@@ -310,7 +319,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     # ── dataset ─────────────────────────────────────────────────────────
-    train_ds = MIMICPrecomputedDataset(args.data_dir, "train")
+    train_ds = MIMICPrecomputedDataset(args.data_dir, "train", feat_prefix=args.feat_prefix)
     print(f"Train set: {len(train_ds)} images")
 
     train_loader = DataLoader(
@@ -341,11 +350,20 @@ def main():
         filename="{step}",
     )
     lr_cb = LearningRateMonitor(logging_interval="step")
+    sample_cb = SampleCallback(
+        sample_imgs=sample_imgs,
+        sample_feats=sample_feats,
+        every_n_steps=args.sample_every,
+        ode_steps=args.ode_steps,
+        cfg=args.cfg,
+    )
 
     # ── logger ───────────────────────────────────────────────────────────
     logger = WandbLogger(
         project=args.wandb_project,
         name=args.wandb_run_name,
+        id=args.wandb_run_id if args.wandb_run_id else None,
+        resume="allow" if args.wandb_run_id else None,
         save_dir=args.output_dir,
         log_model=False,
     )
@@ -357,7 +375,7 @@ def main():
         devices=args.num_gpus,
         precision="bf16-mixed",
         strategy=DDPStrategy(find_unused_parameters=False),
-        callbacks=[ckpt_cb, lr_cb],
+        callbacks=[ckpt_cb, lr_cb, sample_cb],
         logger=logger,
         log_every_n_steps=args.log_every,
         enable_progress_bar=True,
