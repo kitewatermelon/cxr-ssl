@@ -236,8 +236,8 @@ class RCJiTPrecomputedModule(pl.LightningModule):
         if trainable:
             grad_norm  = torch.stack([p.grad.detach().norm() for p in trainable]).norm()
             param_norm = torch.stack([p.detach().norm()      for p in trainable]).norm()
-            self.log("train/grad_norm",  grad_norm,  on_step=True, on_epoch=False, sync_dist=True)
-            self.log("train/param_norm", param_norm, on_step=True, on_epoch=False, sync_dist=True)
+            self.log("train/grad_norm",  grad_norm,  on_step=True, on_epoch=False, sync_dist=False)
+            self.log("train/param_norm", param_norm, on_step=True, on_epoch=False, sync_dist=False)
 
     def on_train_batch_end(self, outputs, batch, batch_idx):
         self.denoiser.update_ema()
