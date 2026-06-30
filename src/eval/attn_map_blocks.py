@@ -2,16 +2,14 @@
 rows = blocks (0,2,4,6,8,10,11), cols = heads (6)
 """
 
-import sys
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from PIL import Image
 from torchvision import transforms
 
-sys.path.insert(0, '/home/yspark/cxr-ssl/src')
 from stable_pretraining.methods import DINOv2
-from mimic_cxr import MIMICCXRDataset
+from data.mimic_cxr import MIMICCXRDataset
 
 import glob, os
 _ckpts = sorted(glob.glob("/home/yspark/cxr-ssl/cxr-ssl/92yv4b9t/checkpoints/*.ckpt"))

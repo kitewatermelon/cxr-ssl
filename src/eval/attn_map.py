@@ -1,15 +1,13 @@
 """Quick attention map visualization for DINOv2 checkpoint."""
 
-import sys
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from PIL import Image
 
-sys.path.insert(0, '/home/yspark/cxr-ssl/src')
 from stable_pretraining.methods import DINOv2
-from mimic_cxr import MIMICCXRDataset
+from data.mimic_cxr import MIMICCXRDataset
 
 CKPT = "/home/yspark/cxr-ssl/cxr-ssl/92yv4b9t/checkpoints/epoch=162-step=469766.ckpt"
 OUT  = "/home/yspark/cxr-ssl/figures/attn_map_epoch162.png"

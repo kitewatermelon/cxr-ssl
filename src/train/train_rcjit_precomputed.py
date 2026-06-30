@@ -18,11 +18,8 @@ Usage:
         --wandb_run_name rcjit-s16-raddino-300k
 """
 
-import os, sys, math, argparse
+import os, math, argparse
 import numpy as np
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'rcdm', 'RCJiT', 'JiT'))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'rcdm', 'RCJiT', 'src'))
 
 import torch
 import torchvision.transforms.functional as TF
@@ -35,7 +32,7 @@ from pytorch_lightning.strategies import DDPStrategy
 from PIL import Image
 import pandas as pd
 
-from denoiser import DINOv2Denoiser
+from rcjit.denoiser import RCJiTDenoiser
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +190,7 @@ class RCJiTPrecomputedModule(pl.LightningModule):
             interval_min       = args.interval_min,
             interval_max       = args.interval_max,
         )
-        denoiser = DINOv2Denoiser(denoiser_args)
+        denoiser = RCJiTDenoiser(denoiser_args)
         if args.compile:
             torch._dynamo.config.cache_size_limit = 128
             torch._dynamo.config.optimize_ddp = False

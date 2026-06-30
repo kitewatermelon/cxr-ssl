@@ -1,15 +1,13 @@
 """Per-head attention map visualization for DINOv2 checkpoint."""
 
-import sys
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from PIL import Image
 from torchvision import transforms
 
-sys.path.insert(0, '/home/yspark/cxr-ssl/src')
 from stable_pretraining.methods import DINOv2
-from mimic_cxr import MIMICCXRDataset
+from data.mimic_cxr import MIMICCXRDataset
 
 CKPT     = "/home/yspark/cxr-ssl/cxr-ssl/92yv4b9t/checkpoints/epoch=163-step=472648.ckpt"
 OUT      = "/home/yspark/cxr-ssl/figures/attn_map_per_head_raw_epoch163.png"

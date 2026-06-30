@@ -18,9 +18,6 @@ import sys
 import math
 import argparse
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'rcdm', 'RCJiT', 'JiT'))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'rcdm', 'RCJiT', 'src'))
-
 # CheXFound path is injected at runtime via --chexfound_dir (parsed early below)
 
 import torch
@@ -35,8 +32,8 @@ from stable_pretraining.data import transforms
 from stable_pretraining.data import gpu_transforms as gt
 from stable_pretraining.data.datasets import FromTorchDataset
 
-from denoiser import DINOv2Denoiser
-from mimic_cxr import MIMICCXRDataset
+from rcjit.denoiser import RCJiTDenoiser
+from data.mimic_cxr import MIMICCXRDataset
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +194,7 @@ class RCJiTMAEModule(pl.LightningModule):
             interval_min    = args.interval_min,
             interval_max    = args.interval_max,
         )
-        denoiser = DINOv2Denoiser(denoiser_args)
+        denoiser = RCJiTDenoiser(denoiser_args)
         if args.compile:
             torch._dynamo.config.cache_size_limit = 128
             torch._dynamo.config.optimize_ddp = False

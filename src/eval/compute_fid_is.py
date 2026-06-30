@@ -7,7 +7,7 @@ Pipeline:
   IS:  generated images only
 """
 
-import os, sys, argparse
+import os, argparse
 import torch
 import numpy as np
 from PIL import Image
@@ -16,12 +16,8 @@ from torch.utils.data import DataLoader, Dataset
 import torchvision.utils as vutils
 from tqdm import tqdm
 
-sys.path.insert(0, '/home/yspark/cxr-ssl/src')
-sys.path.insert(0, '/home/yspark/rcdm/RCJiT/JiT')
-sys.path.insert(0, '/home/yspark/rcdm/RCJiT/src')
-
-from denoiser import DINOv2Denoiser
-from mimic_cxr import MIMICCXRDataset
+from rcjit.denoiser import RCJiTDenoiser
+from data.mimic_cxr import MIMICCXRDataset
 
 # ── config ────────────────────────────────────────────────────────────────
 CKPT         = "/home/yspark/cxr-ssl/output/rcjit_s16_mae_pool_cxr/checkpoints/stepstep=0300000.ckpt"
@@ -88,7 +84,7 @@ args = argparse.Namespace(
     interval_max    = hp['interval_max'],
 )
 
-denoiser = DINOv2Denoiser(args)
+denoiser = RCJiTDenoiser(args)
 
 # state_dict 로드 (denoiser. prefix 제거)
 sd = {k[len("denoiser."):]: v

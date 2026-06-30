@@ -1,5 +1,5 @@
 """
-I-JEPA Pre-training with PyTorch Lightning + MIMIC-CXR
+MAE Pre-training with PyTorch Lightning + MIMIC-CXR
 """
 
 import torch
@@ -7,14 +7,12 @@ import lightning as pl
 from torch.utils.data import DataLoader
 from functools import partial
 from lightning.pytorch.loggers import WandbLogger
-from lightning.pytorch.strategies import DDPStrategy
 
 import stable_pretraining as spt
-from stable_pretraining.methods import IJEPA
+from stable_pretraining.methods import MAE
 from stable_pretraining.data.datasets import FromTorchDataset
-from stable_pretraining.callbacks import TeacherStudentCallback
 
-from mimic_cxr import MIMICCXRDataset, get_MAE_aug
+from data.mimic_cxr import MIMICCXRDataset, get_MAE_aug
 from utils import get_common_callbacks
 
 
@@ -55,12 +53,12 @@ class MIMICCXRDataModule(pl.LightningDataModule):
         return DataLoader(
             self.train_ds,
             batch_size=self.hparams.batch_size,
-            shuffle=False,
+            shuffle=False,  # DDP: Lightning이 DistributedSampler로 shuffle 처리
             num_workers=self.hparams.num_workers,
             pin_memory=True,
             persistent_workers=True,
             multiprocessing_context="fork",
-            drop_last=True,
+            drop_last=True,  # DDP: 마지막 불완전 배치 제거 (GPU간 크기 불일치 방지)
             prefetch_factor=4,
         )
 
@@ -77,10 +75,10 @@ class MIMICCXRDataModule(pl.LightningDataModule):
         )
 
 
-class IJEPAModule(spt.Module):
+class MAEModule(spt.Module):
     def __init__(self, arch: str = "vit_small_patch16_224", lr: float = 1e-3):
         super().__init__(hparams={"arch": arch, "lr": lr})
-        self.model = IJEPA(arch)
+        self.mae = MAE(arch)
         self.gpu_aug = None
         self.val_aug = None
         self.optim = {
@@ -91,37 +89,48 @@ class IJEPAModule(spt.Module):
 
     @property
     def embed_dim(self):
-        return self.model.embed_dim
+        return self.mae.encoder.embed_dim
 
     def on_fit_start(self):
         super().on_fit_start()
         _, self.gpu_aug, self.val_aug = get_MAE_aug(self.device)
+
+    def on_train_start(self):
+        super().on_train_start()
+
+    def after_manual_backward(self):
+        scaler = self.trainer.precision_plugin.scaler
+        scale = scaler.get_scale() if scaler is not None else 1.0
+        scaled_norm = torch.nn.utils.clip_grad_norm_(
+            self.mae.parameters(), max_norm=float("inf")
+        )
+        self.log("train/grad_norm", scaled_norm / scale, on_step=True, on_epoch=False)
 
     def forward(self, batch, stage="fit"):
         img = batch["image"]
         aug = self.gpu_aug if stage == "fit" else self.val_aug
         img = aug({"image": img})["image"]
 
-        out = self.model(img)
-        # embedding: [B, N, D] patch tokens → mean pool → [B, D]
-        cls_token = out.embedding.mean(dim=1)
+        enc_out = self.mae.encoder(img)
+        cls_token = enc_out.encoded[:, 0]  # [B, D]
 
         if stage != "fit":
-            return {
-                "loss": torch.tensor(0.0, device=img.device),
-                "cls_token": cls_token,
-                "label": batch["labels"].long(),
-            }
+            return {"loss": torch.tensor(0.0, device=img.device), "cls_token": cls_token, "label": batch["labels"].long()}
 
-        self.log("train/loss", out.loss, prog_bar=True, on_step=True, on_epoch=True)
-        self.log("train/num_context", float(out.num_context), on_step=True, on_epoch=False)
-        self.log("train/num_targets", float(out.num_targets), on_step=True, on_epoch=False)
+        encoded_patches = enc_out.encoded[:, self.mae.encoder.num_prefix_tokens:]
+        predictions = self.mae.decoder(
+            encoded_patches,
+            enc_out.mask,
+            ids_keep=enc_out.ids_keep,
+            output_masked_only=False,
+        )
+        loss = self.mae.loss_fn(predictions, img.to(predictions.dtype), enc_out.mask)
 
-        return {
-            "loss": out.loss,
-            "cls_token": cls_token,
-            "label": batch["labels"].long(),
-        }
+        param_norm = torch.stack([p.norm() for p in self.mae.parameters()]).norm()
+
+        self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("train/param_norm", param_norm, on_step=True, on_epoch=False)
+        return {"loss": loss, "cls_token": cls_token, "label": batch["labels"].long()}
 
 
 # ─────────────────────────────────────────────
@@ -137,31 +146,28 @@ if __name__ == "__main__":
         frontal_only=False,
     )
 
-    model = IJEPAModule(arch="vit_small_patch16_224", lr=1.5e-4)
+    model = MAEModule(arch="vit_small_patch16_224", lr=1.5e-4)
 
     logger = WandbLogger(
         entity="RCJiT",
         project="cxr-ssl",
-        name="IJEPA-vit_small-mimic",
+        name="MAE-vit_small-mimic",
     )
 
     trainer = pl.Trainer(
         max_epochs=800,
         accelerator="gpu",
         devices="auto",
-        strategy=DDPStrategy(find_unused_parameters=True),
+        strategy="ddp",
         precision="16-mixed",
         log_every_n_steps=50,
         logger=logger,
-        callbacks=[
-            TeacherStudentCallback(),
-            *get_common_callbacks(
-                model,
-                num_classes=14,
-                task="multilabel",
-                queue_length=4096,
-            ),
-        ],
+        callbacks=get_common_callbacks(
+            model,
+            num_classes=14,
+            task="multilabel",
+            queue_length=4096,
+        ),
     )
 
     trainer.fit(model, datamodule)
